@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Собери торт — Playable Ad</title>
+    <style>
+        * { margin: 0; padding: 0; user-select: none; -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+        body { background: linear-gradient(135deg, #1a472a, #0d2818); display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: 'Segoe UI', system-ui, sans-serif; }
+        #game-container { position: relative; width: 100%; max-width: 450px; margin: 0 auto; padding: 10px; }
+        canvas { display: block; width: 100%; height: auto; cursor: grab; border-radius: 32px; box-shadow: 0 20px 40px rgba(0,0,0,0.3); background: #fdf8ed; }
+        canvas:active { cursor: grabbing; }
+        #score { position: absolute; top: 15px; left: 20px; color: #5d3a1a; font-size: 22px; font-weight: bold; background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); padding: 6px 14px; border-radius: 40px; z-index: 10; pointer-events: none; }
+        #timer { position: absolute; top: 15px; right: 20px; color: #5d3a1a; font-size: 22px; font-weight: bold; background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); padding: 6px 14px; border-radius: 40px; z-index: 10; pointer-events: none; }
+        .hint { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); width: auto; white-space: nowrap; text-align: center; color: #5d3a1a; background: rgba(255,255,255,0.8); backdrop-filter: blur(8px); padding: 6px 16px; border-radius: 20px; font-size: 11px; font-weight: bold; z-index: 10; pointer-events: none; }
+        #endCard { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); backdrop-filter: blur(20px); display: none; flex-direction: column; justify-content: center; align-items: center; color: white; z-index: 20; border-radius: 32px; text-align: center; }
+        #endCard h1 { font-size: 28px; margin-bottom: 15px; color: #ffd700; }
+        #endCard p { font-size: 16px; margin-bottom: 10px; }
+        .final-score { font-size: 48px; font-weight: bold; color: #ffd700; margin: 10px 0; }
+        button { background: linear-gradient(135deg, #ff6b35, #ff3b6f); color: white; border: none; padding: 12px 35px; font-size: 18px; font-weight: bold; border-radius: 50px; margin-top: 20px; cursor: pointer; }
+        button:active { transform: scale(0.96); }
+        .particle { position: absolute; pointer-events: none; font-size: 28px; animation: particleFloat 0.8s ease-out forwards; }
+        @keyframes particleFloat { 0% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-50px) scale(1.5); } }
+    </style>
+</head>
+<body>
+<div id="game-container">
+    <canvas id="gameCanvas" width="450" height="650"></canvas>
+    <div id="score">🍰 0</div>
+    <div id="timer">⏱ 45</div>
+    <div class="hint">🍳 ПЕРЕТАЩИ СЛОЙ НА ТОРТ 🍳</div>
+    <div id="endCard">
+        <h1>🎉 ТОРТ ГОТОВ! 🎉</h1>
+        <p>Ты собрал торт</p>
+        <div class="final-score"><span id="finalScore">0</span>/6 слоёв</div>
+        <button id="installBtn">📲 ПОПРОБОВАТЬ ТОРТ</button>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let score = 0;
+    let timeLeft = 45;
+    let gameActive = true;
+    
+    let draggingIndex = -1;
+    let dragX = 0, dragY = 0;
+    let dragOffsetX = 0, dragOffsetY = 0;
+    
+    let ingredients = [];
+    let cakeLayers = [];
+    let nextLayerNeeded = 0;
+    
+    let bgImage = null;
+    let chefImage = null;
+    let layerImages = [];
+    
+    const canvasWidth = 450;
+    const canvasHeight = 650;
+    const totalLayers = 6;
+    
+    // НАСТРОЙКИ ПОЗИЦИЙ СЛОЁВ НА ТОРТЕ
+    // Здесь можно менять сдвиг для каждого слоя отдельно
+    const layerOffsets = {
+        0: { x: 0, y: 0 },    // 1.png - без сдвига
+        1: { x: 0, y: 2 },    // 2.png - без сдвига
+        2: { x: 0, y: 15 },    // 3.png - сдвиг вниз на 8px
+        3: { x: 0, y: 18 },    // 4.png - без сдвига
+        4: { x: 0, y: 22 },    // 5.png - без сдвига
+        5: { x: 0, y: 32 }     // 6.png - без сдвига
+    };
+    
+    const layerNames = ['Корж 1', 'Крем', 'Корж 2', 'Начинка', 'Корж 3', 'Украшение'];
+    
+    const ingredientPositions = [
+        { x: 60, y: 420 }, { x: 140, y: 420 }, { x: 220, y: 420 },
+        { x: 300, y: 420 }, { x: 380, y: 420 }, { x: 100, y: 510 },
+        { x: 180, y: 510 }, { x: 260, y: 510 }, { x: 340, y: 510 }
+    ];
+    
+    function shuffleArray(arr) {
+        for(let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    }
+    
+    function initIngredients() {
+        ingredients = [];
+        for(let i = 0; i < totalLayers; i++) {
+            ingredients.push({
+                id: i,
+                layerIndex: i,
+                name: layerNames[i],
+                isCorrect: true,
+                x: ingredientPositions[i].x,
+                y: ingredientPositions[i].y,
+                collected: false
+            });
+        }
+        ingredients = shuffleArray(ingredients);
+    }
+    
+    function initCake() {
+        cakeLayers = [];
+        nextLayerNeeded = 0;
+    }
+    
+    function loadImages() {
+        return new Promise((resolve) => {
+            let loaded = 0;
+            const total = 1 + 1 + totalLayers;
+            
+            function checkLoaded() {
+                loaded++;
+                if(loaded === total) resolve();
+            }
+            
+            bgImage = new Image();
+            bgImage.src = 'background.jpeg';
+            bgImage.onload = checkLoaded;
+            bgImage.onerror = checkLoaded;
+            
+            chefImage = new Image();
+            chefImage.src = 'chef.png';
+            chefImage.onload = checkLoaded;
+            chefImage.onerror = checkLoaded;
+            
+            for(let i = 1; i <= totalLayers; i++) {
+                const img = new Image();
+                img.src = `${i}.png`;
+                img.onload = checkLoaded;
+                img.onerror = checkLoaded;
+                layerImages.push(img);
+            }
+        });
+    }
+    
+    function drawBackground() {
+        if(bgImage && bgImage.complete) {
+            ctx.drawImage(bgImage, 0, 0, canvasWidth, canvasHeight);
+        } else {
+            ctx.fillStyle = '#fdf0d8';
+            ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        }
+    }
+    
+    function drawChef() {
+        if(chefImage && chefImage.complete) {
+            ctx.drawImage(chefImage, canvasWidth - 210, 130, 320, 320);
+        }
+    }
+    
+    function drawCake() {
+    const cakeX = canvasWidth / 2 - 55;
+    const cakeY = 380;  // ← сдвинул ниже (было 120)
+    const layerWidth = 110;
+    const layerHeight = 52;
+    
+    // ===== 1. СНАЧАЛА РИСУЕМ ТАРЕЛКУ (ПОД ТОРТОМ) =====
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#d4a574';
+    ctx.beginPath();
+    ctx.ellipse(cakeX + 55, cakeY + 105, 70, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // ===== 2. ЗАТЕМ РИСУЕМ СЛОИ ТОРТА (ПОВЕРХ ТАРЕЛКИ) =====
+    for(let i = 0; i < cakeLayers.length; i++) {
+        const layerIndex = cakeLayers[i];
+        if(layerImages[layerIndex] && layerImages[layerIndex].complete) {
+            let x = cakeX;
+            let y = cakeY + 70 - (i * 18);
+            const offset = layerOffsets[layerIndex] || { x: 0, y: 0 };
+            x = x + offset.x;
+            y = y + offset.y;
+            ctx.drawImage(layerImages[layerIndex], x, y, layerWidth, layerHeight);
+        }
+    }
+    
+
+    
+
+}
+    
+    function drawIngredients() {
+        for(let i = 0; i < ingredients.length; i++) {
+            const ing = ingredients[i];
+            if(ing.collected) continue;
+            
+            let x = ing.x;
+            let y = ing.y;
+            if(draggingIndex === i) {
+                x = dragX - dragOffsetX;
+                y = dragY - dragOffsetY;
+            }
+            
+            if(layerImages[ing.layerIndex] && layerImages[ing.layerIndex].complete) {
+                ctx.shadowBlur = 8;
+                ctx.drawImage(layerImages[ing.layerIndex], x - 45, y - 26, 90, 60);
+                ctx.shadowBlur = 0;
+            }
+            
+        }
+    }
+    
+    function isOverCake(x, y) {
+        const cakeX = canvasWidth / 2 - 55;
+        const cakeY = 380;
+        const cakeWidth = 110;
+        const cakeHeight = 130;
+        return (x >= cakeX && x <= cakeX + cakeWidth && y >= cakeY && y <= cakeY + cakeHeight);
+    }
+    
+    function createParticle(x, y, text) {
+        const particle = document.createElement('div');
+        particle.className = 'particle';
+        particle.textContent = text;
+        particle.style.left = x + 'px';
+        particle.style.top = y + 'px';
+        document.getElementById('game-container').appendChild(particle);
+        setTimeout(() => particle.remove(), 800);
+    }
+    
+    function findIngredientUnderCursor(x, y) {
+        for(let i = 0; i < ingredients.length; i++) {
+            const ing = ingredients[i];
+            if(ing.collected) continue;
+            const dx = x - ing.x;
+            const dy = y - ing.y;
+            if(Math.abs(dx) < 50 && Math.abs(dy) < 30) return i;
+        }
+        return -1;
+    }
+    
+    function draw() {
+        drawBackground();
+        drawCake();
+        drawChef();
+        drawIngredients();
+    }
+    
+    function handleDragStart(e) {
+        if(!gameActive) return;
+        e.preventDefault();
+        
+        let clientX, clientY;
+        if(e.touches) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+        
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvasWidth / rect.width;
+        const scaleY = canvasHeight / rect.height;
+        const canvasX = (clientX - rect.left) * scaleX;
+        const canvasY = (clientY - rect.top) * scaleY;
+        
+        const index = findIngredientUnderCursor(canvasX, canvasY);
+        if(index !== -1) {
+            draggingIndex = index;
+            dragOffsetX = canvasX - ingredients[index].x;
+            dragOffsetY = canvasY - ingredients[index].y;
+            dragX = canvasX;
+            dragY = canvasY;
+            draw();
+        }
+    }
+    
+    function handleDragMove(e) {
+        if(draggingIndex === -1) return;
+        e.preventDefault();
+        
+        let clientX, clientY;
+        if(e.touches) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+        
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvasWidth / rect.width;
+        const scaleY = canvasHeight / rect.height;
+        const canvasX = (clientX - rect.left) * scaleX;
+        const canvasY = (clientY - rect.top) * scaleY;
+        
+        dragX = canvasX;
+        dragY = canvasY;
+        draw();
+    }
+    
+    function handleDragEnd(e) {
+        if(draggingIndex === -1) return;
+        e.preventDefault();
+        
+        let clientX, clientY;
+        if(e.changedTouches) {
+            clientX = e.changedTouches[0].clientX;
+            clientY = e.changedTouches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+        
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvasWidth / rect.width;
+        const scaleY = canvasHeight / rect.height;
+        const canvasX = (clientX - rect.left) * scaleX;
+        const canvasY = (clientY - rect.top) * scaleY;
+        
+        const ing = ingredients[draggingIndex];
+        const rectCanvas = canvas.getBoundingClientRect();
+        const screenX = rectCanvas.left + (dragX * rectCanvas.width / canvasWidth);
+        const screenY = rectCanvas.top + (dragY * rectCanvas.height / canvasHeight);
+        
+        if(isOverCake(canvasX, canvasY) && ing && !ing.collected) {
+            if(ing.layerIndex === nextLayerNeeded) {
+                ing.collected = true;
+                cakeLayers.push(ing.layerIndex);
+                score++;
+                nextLayerNeeded++;
+                document.getElementById('score').innerText = `🍰 ${score}`;
+                createParticle(screenX, screenY, '🎂');
+            } else {
+                createParticle(screenX, screenY, '⚠️');
+            }
+        }
+        
+        draggingIndex = -1;
+        draw();
+        
+        if(score === totalLayers) {
+            setTimeout(() => endGame(), 300);
+        }
+    }
+    
+    function startTimer() {
+        const timerInterval = setInterval(() => {
+            if(!gameActive) return;
+            timeLeft--;
+            document.getElementById('timer').innerText = `⏱ ${timeLeft}`;
+            if(timeLeft <= 0) {
+                clearInterval(timerInterval);
+                endGame();
+            }
+        }, 1000);
+    }
+    
+   function endGame() {
+    if(!gameActive) return;
+    gameActive = false;
+    
+    // Задержка 1.5 секунды перед blur и уведомлением
+    setTimeout(() => {
+        document.getElementById('finalScore').innerText = score;
+        
+        // Добавляем blur на канвас
+        canvas.style.filter = 'blur(2px)';
+        canvas.style.transition = 'filter 0.5s ease';
+        
+        // Показываем финальную карточку
+        const endCard = document.getElementById('endCard');
+        endCard.style.display = 'flex';
+        endCard.style.backdropFilter = 'blur(5px)';
+        endCard.style.backgroundColor = 'rgba(0,0,0,0.5)';
+        
+        document.getElementById('installBtn').onclick = () => {
+            alert('🚀 Переход в полную версию игры!');
+        };
+    }, 1500);  // ← 1500 миллисекунд = 1.5 секунды
+}
+
+    
+    async function startGame() {
+        await loadImages();
+        initIngredients();
+        initCake();
+        draw();
+        startTimer();
+    }
+    
+    canvas.addEventListener('mousedown', handleDragStart);
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragEnd);
+    canvas.addEventListener('touchstart', handleDragStart, { passive: false });
+    window.addEventListener('touchmove', handleDragMove, { passive: false });
+    window.addEventListener('touchend', handleDragEnd);
+    
+    startGame();
+</script>
+</body>
+</html>
